@@ -1,0 +1,104 @@
+# Entidades provisorias dos 7 ambientes, usadas pelo painel de 3,5" ate os ESP32 existirem.
+# Ao instalar um controlador, troque as entidades em lcd35/rooms.json e remova o ambiente daqui.
+
+input_boolean:
+  luz_ambiente_1:
+    name: Luz Ambiente 1
+    icon: mdi:lightbulb
+  ar_ambiente_1:
+    name: Ar Ambiente 1
+    icon: mdi:air-conditioner
+  luz_ambiente_2:
+    name: Luz Ambiente 2
+    icon: mdi:lightbulb
+  ar_ambiente_2:
+    name: Ar Ambiente 2
+    icon: mdi:air-conditioner
+  luz_ambiente_3:
+    name: Luz Ambiente 3
+    icon: mdi:lightbulb
+  ar_ambiente_3:
+    name: Ar Ambiente 3
+    icon: mdi:air-conditioner
+  luz_ambiente_4:
+    name: Luz Ambiente 4
+    icon: mdi:lightbulb
+  ar_ambiente_4:
+    name: Ar Ambiente 4
+    icon: mdi:air-conditioner
+  luz_ambiente_5:
+    name: Luz Ambiente 5
+    icon: mdi:lightbulb
+  ar_ambiente_5:
+    name: Ar Ambiente 5
+    icon: mdi:air-conditioner
+  luz_ambiente_6:
+    name: Luz Ambiente 6
+    icon: mdi:lightbulb
+  ar_ambiente_6:
+    name: Ar Ambiente 6
+    icon: mdi:air-conditioner
+  luz_ambiente_7:
+    name: Luz Ambiente 7
+    icon: mdi:lightbulb
+  ar_ambiente_7:
+    name: Ar Ambiente 7
+    icon: mdi:air-conditioner
+
+input_number:
+  setpoint_ambiente_1:
+    name: Setpoint Ambiente 1
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_2:
+    name: Setpoint Ambiente 2
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_3:
+    name: Setpoint Ambiente 3
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_4:
+    name: Setpoint Ambiente 4
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_5:
+    name: Setpoint Ambiente 5
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_6:
+    name: Setpoint Ambiente 6
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer
+  setpoint_ambiente_7:
+    name: Setpoint Ambiente 7
+    min: 16
+    max: 30
+    step: 1
+    initial: 24
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer

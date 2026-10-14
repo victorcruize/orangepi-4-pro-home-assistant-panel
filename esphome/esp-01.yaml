@@ -1,0 +1,237 @@
+# ESP-01 - controlador de ambiente (piloto), ESP32-S3.
+# Periféricos desta versão: receptor IR (módulo de 38 kHz), emissor IR (LED) e sensor de gás MQ.
+#
+# Pinagem
+#   GPIO4  <- S do módulo receptor IR (alimentado em 3,3 V)
+#   GPIO5  -> resistor 100 ohm -> anodo (perna longa) do LED IR; catodo no GND
+#   GPIO1  <- AO do sensor MQ, POR DIVISOR 10k/20k (o módulo trabalha em 5 V; o ESP só aceita 3,3 V)
+#   GPIO2  <- DO do sensor MQ, POR DIVISOR 10k/20k
+#   GPIO48 = LED RGB da placa (ja soldado)
+#   Reservados: GPIO8/GPIO9 para I2C (sensor de temperatura e umidade), GPIO10/GPIO11 para relés.
+# Placa: ESP32-S3 (QFN56) rev v0.2, 16 MB de flash, 8 MB de PSRAM embutida (modulo N16R8), USB-Serial/JTAG nativa.
+# Com PSRAM octal, os GPIOs 35, 36 e 37 nao podem ser usados; 26 a 32 sao da flash.
+esphome:
+  name: esp-01
+  friendly_name: ESP-01
+  comment: Controlador de ambiente (piloto)
+
+# Componente proprio para o ar-condicionado Samsung (pasta components/samsung_ac_ir).
+external_components:
+  - source:
+      type: local
+      path: components
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret esp01_api_key
+  # Envia um comando infravermelho bruto (duracoes em microssegundos; positivo = aceso, negativo = apagado).
+  # No Home Assistant aparece como a acao esphome.esp_01_ir_enviar.
+  actions:
+    - action: ir_enviar
+      variables:
+        code: int[]
+      then:
+        - remote_transmitter.transmit_raw:
+            carrier_frequency: 38kHz
+            code: !lambda 'return code;'
+
+globals:
+  - id: ir_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Sem a rede principal, o controlador abre esta rede propria para ser reconfigurado.
+  ap:
+    ssid: "ESP-01 Recuperacao"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# Proxy Bluetooth: o controlador vira uma antena Bluetooth do Home Assistant neste ambiente.
+# "active" permite tambem conectar aos dispositivos, nao so escutar os anuncios.
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+bluetooth_proxy:
+  active: true
+
+# Receptor: registra no log todo código recebido, para aprender os comandos dos controles remotos.
+remote_receiver:
+  id: ir_rx
+  pin:
+    number: GPIO4
+    inverted: true
+    mode:
+      input: true
+      pullup: true
+  dump: all
+  tolerance: 25%
+  idle: 25ms
+  filter: 200us          # descarta estalos curtos de ruído de luz ambiente
+  # Um comando de ar-condicionado tem centenas de pulsos, mais do que os 192 símbolos da memória RMT comum.
+  # Com DMA (disponível no ESP32-S3) o quadro inteiro cabe, em vez de chegar cortado.
+  use_dma: true
+  rmt_symbols: 1024
+  receive_symbols: 1024
+  on_raw:
+    # Conta todo sinal com tamanho de comando de verdade (ruido curto fica de fora).
+    - lambda: |-
+        if (x.size() < 16) return;
+        id(ir_count) += 1;
+        id(ir_total).publish_state(id(ir_count));
+        id(ir_last).publish_state(str_sprintf("%d pulsos", (int) x.size()));
+    # Em modo de aprendizado, entrega o comando capturado ao servidor e sai do modo.
+    - if:
+        condition:
+          lambda: 'return id(ir_learn).state && x.size() >= 16;'
+        then:
+          - homeassistant.event:
+              event: esphome.ir_capturado
+              data:
+                device: esp_01
+                code: !lambda |-
+                  std::string s;
+                  for (auto v : x) { if (!s.empty()) s += ","; s += to_string(v); }
+                  return s;
+          - switch.turn_off: ir_learn
+
+# Ar-condicionado Samsung por infravermelho. Monta o comando completo (modo, temperatura, ventilacao,
+# aletas) e acompanha o controle original pelo receptor. Funciona sem internet.
+climate:
+  - platform: samsung_ac_ir
+    name: Ar
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    humidity_sensor: umid_ambiente
+
+switch:
+  # Ligado, o proximo comando recebido e enviado ao servidor para ser salvo. Desliga sozinho em 60 s.
+  - platform: template
+    name: Aprender IR
+    id: ir_learn
+    icon: mdi:remote
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - delay: 60s
+      - switch.turn_off: ir_learn
+
+# O ESP32-S3 tem 192 símbolos de memória RMT para transmissão, divididos entre o emissor IR e o LED da placa.
+remote_transmitter:
+  pin: GPIO5
+  carrier_duty_percent: 50%
+  # O ESP32-S3 tem 192 simbolos de memoria RMT para transmissao: 144 aqui e 48 no LED da placa.
+  # Um comando normal do ar (117 simbolos) cabe inteiro, sem reabastecimento no meio do envio.
+  # (DMA na transmissao foi testado e nao emite nesta placa.)
+  rmt_symbols: 144
+
+sensor:
+  # Temperatura e umidade do ambiente, lidas pelo proprio ar e trazidas do Home Assistant.
+  # Serao trocadas por um sensor ligado a este controlador quando ele existir.
+  - platform: homeassistant
+    id: temp_ambiente
+    entity_id: sensor.sala_1_ar_temperatura
+    internal: true
+  - platform: homeassistant
+    id: umid_ambiente
+    entity_id: sensor.sala_1_ar_umidade
+    internal: true
+  # Tensão na saída analógica do MQ. O divisor entrega 2/3 da tensão, daí o fator 1,5.
+  # É uma leitura relativa: sobe com a concentração de gás, mas não é uma medida calibrada.
+  - platform: adc
+    pin: GPIO1
+    name: Gás (tensão do sensor)
+    attenuation: 12db
+    update_interval: 10s
+    accuracy_decimals: 2
+    filters:
+      - multiply: 1.5
+      - sliding_window_moving_average:
+          window_size: 6
+          send_every: 3
+  - platform: template
+    name: IR sinais recebidos
+    id: ir_total
+    icon: mdi:remote
+    accuracy_decimals: 0
+    state_class: total_increasing
+  - platform: wifi_signal
+    name: Sinal Wi-Fi
+    update_interval: 60s
+  - platform: uptime
+    name: Tempo ligado
+  - platform: internal_temperature
+    name: Temperatura interna
+
+binary_sensor:
+  - platform: status
+    name: Online
+  # Saída digital do MQ: vai a nível baixo quando passa do limite ajustado no trimpot do módulo.
+  # Com pull-up, o sensor desconectado lê "sem gás" em vez de disparar alarme falso.
+  - platform: gpio
+    name: Gás acima do limite
+    device_class: gas
+    pin:
+      number: GPIO2
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 2s
+      - delayed_off: 5s
+
+text_sensor:
+  - platform: template
+    name: IR ultimo sinal
+    id: ir_last
+    icon: mdi:remote
+  - platform: wifi_info
+    ip_address:
+      name: IP
+
+# LED RGB da propria placa (WS2812 no GPIO48). Sem controle ele acende sozinho com cor aleatoria;
+# aqui fica apagado ao ligar e disponivel no Home Assistant como luz.
+light:
+  - platform: esp32_rmt_led_strip
+    name: LED da placa
+    pin: GPIO48
+    num_leds: 1
+    rmt_symbols: 48
+    chipset: ws2812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 0s
+
+button:
+  - platform: restart
+    name: Reiniciar
+  # Dispara um código NEC qualquer, só para conferir o LED emissor (ele pisca visível na câmera do celular).
+  - platform: template
+    name: Testar emissor IR
+    on_press:
+      - remote_transmitter.transmit_nec:
+          address: 0x00FF
+          command: 0x00FF
+          repeat:
+            times: 5
+            wait_time: 100ms

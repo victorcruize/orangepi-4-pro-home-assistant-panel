@@ -1,0 +1,39 @@
+# CTRL-00 - servidor central de automacao (Orange Pi 4 Pro)
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    depends_on:
+      - mosquitto
+
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+
+  esphome:
+    container_name: esphome
+    image: ghcr.io/esphome/esphome:stable
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - USERNAME=${ESPHOME_USER}
+      - PASSWORD=${ESPHOME_PASSWORD}
+    volumes:
+      - ./esphome:/config
+      - /etc/localtime:/etc/localtime:ro

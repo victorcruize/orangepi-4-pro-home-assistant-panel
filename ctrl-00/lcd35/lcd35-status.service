@@ -1,0 +1,12 @@
+[Unit]
+Description=Status screen on the 3.5in SPI TFT
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/orangepi/lcd35/status.py
+WorkingDirectory=/home/orangepi/lcd35
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

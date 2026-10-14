@@ -1,0 +1,198 @@
+# Painel para monitores da rede local. Espelha a tela de 3,5" (ambientes com luz, ar e TV)
+# e acrescenta o que nao cabe nela: consumo, previsao e as outras TVs.
+title: Hub
+# Modo quiosque (complemento kiosk-mode): usuarios sem privilegio de administrador veem o painel
+# sem menu lateral e sem barra superior. Administradores continuam com a interface completa.
+kiosk_mode:
+  non_admin_settings:
+    kiosk: true
+    ignore_entity_settings: true
+views:
+  - title: Ambientes
+    path: ambientes
+    icon: mdi:home-variant
+    type: sections
+    theme: Hub
+    max_columns: 4
+    dense_section_placement: true
+    badges:
+      - type: entity
+        entity: weather.forecast_home
+        name: Tempo
+        show_name: true
+        state_content: [state, temperature]
+      - type: entity
+        entity: sensor.sala_1_ar_temperatura
+        name: Sala 1
+        show_name: true
+        color: indigo
+      - type: entity
+        entity: sensor.sala_3_ar_temperatura
+        name: Sala 3
+        show_name: true
+        color: indigo
+      - type: entity
+        entity: sensor.sala_1_ar_potencia
+        name: Ar da Sala 1
+        show_name: true
+        color: amber
+      - type: entity
+        entity: sensor.sala_2_ar_potencia
+        name: Ar da Sala 2
+        show_name: true
+        color: amber
+    sections:
+      # ------------------------------------------------------------------ Sala 1 (completa)
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Sala 1
+            heading_style: title
+            icon: mdi:desk
+            badges:
+              - type: entity
+                entity: sensor.sala_1_ar_temperatura
+                color: indigo
+              - type: entity
+                entity: sensor.sala_1_ar_umidade
+                color: cyan
+          - type: tile
+            entity: switch.sala_1_luz_1
+            name: Luz 1
+            icon: mdi:ceiling-light
+            color: amber
+            tap_action: {action: toggle}
+            icon_tap_action: {action: toggle}
+          - type: tile
+            entity: switch.sala_1_luz_2
+            name: Luz 2
+            icon: mdi:ceiling-light
+            color: amber
+            tap_action: {action: toggle}
+            icon_tap_action: {action: toggle}
+          - type: tile
+            entity: climate.sala_1_ar
+            name: Ar da Sala 1
+            icon: mdi:air-conditioner
+            state_content: [state, current_temperature]
+            features:
+              - type: climate-hvac-modes
+              - type: target-temperature
+            features_position: bottom
+          - type: tile
+            entity: climate.sala_2_ar
+            name: Sala 2
+            icon: mdi:air-conditioner
+            state_content: [state, current_temperature]
+            features:
+              - type: climate-hvac-modes
+              - type: target-temperature
+            features_position: bottom
+          - type: tile
+            entity: media_player.sala_1_tv
+            name: TV
+            icon: mdi:television
+            color: green
+            state_content: [state, source]
+            features:
+              - type: media-player-volume-slider
+            features_position: bottom
+            icon_tap_action: {action: toggle}
+          - type: tile
+            entity: media_player.sala_1_soundbar
+            name: Soundbar
+            icon: mdi:soundbar
+            color: green
+            features:
+              - type: media-player-volume-slider
+            features_position: bottom
+            icon_tap_action: {action: toggle}
+
+      # ------------------------------------------------------------------ Sala 3
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sala 3
+            heading_style: title
+            icon: mdi:bed
+            badges:
+              - type: entity
+                entity: sensor.sala_3_ar_temperatura
+                color: indigo
+              - type: entity
+                entity: sensor.sala_3_ar_umidade
+                color: cyan
+          - type: tile
+            entity: climate.sala_3_ar
+            name: Ar da Sala 3
+            icon: mdi:air-conditioner
+            state_content: [state, current_temperature]
+            features:
+              - type: climate-hvac-modes
+              - type: target-temperature
+            features_position: bottom
+            grid_options: {columns: 12}
+
+      # ------------------------------------------------------------------ Tempo
+      - type: grid
+        cards:
+          - type: heading
+            heading: Previsão
+            heading_style: title
+            icon: mdi:weather-partly-cloudy
+          - type: weather-forecast
+            entity: weather.forecast_home
+            show_current: true
+            show_forecast: true
+            forecast_type: daily
+            grid_options: {columns: 12}
+
+      # ------------------------------------------------------------------ Consumo
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Consumo dos ares
+            heading_style: title
+            icon: mdi:lightning-bolt
+          - type: tile
+            entity: sensor.sala_1_ar_potencia
+            name: Ar da Sala 1 agora
+            icon: mdi:flash
+            color: amber
+            grid_options: {columns: 4}
+          - type: tile
+            entity: sensor.sala_2_ar_potencia
+            name: Ar da Sala 2 agora
+            icon: mdi:flash
+            color: amber
+            grid_options: {columns: 4}
+          - type: tile
+            entity: sensor.sala_3_ar_potencia
+            name: Sala 3 agora
+            icon: mdi:flash
+            color: amber
+            grid_options: {columns: 4}
+          - type: history-graph
+            title: Potência nas últimas 24 h
+            hours_to_show: 24
+            entities:
+              - entity: sensor.sala_1_ar_potencia
+                name: Ar da Sala 1
+              - entity: sensor.sala_2_ar_potencia
+                name: Ar da Sala 2
+              - entity: sensor.sala_3_ar_potencia
+                name: Sala 3
+            grid_options: {columns: 12}
+          - type: history-graph
+            title: Temperatura nas últimas 24 h
+            hours_to_show: 24
+            entities:
+              - entity: sensor.sala_1_ar_temperatura
+                name: Sala 1
+              - entity: sensor.sala_2_ar_temperatura
+                name: Sala 2
+              - entity: sensor.sala_3_ar_temperatura
+                name: Sala 3
+            grid_options: {columns: 12}

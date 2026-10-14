@@ -1,0 +1,35 @@
+# Segredos: nunca versionar. Os arquivos reais ficam so na placa.
+secrets.yaml
+.env
+*.env
+!*.env.example
+config.json
+
+# Copias de seguranca feitas durante o desenvolvimento
+*.bak
+*.bak-*
+*.pre-*
+*.v1
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Ferramentas e arquivos locais que nao fazem parte do projeto
+.remember/
+.claude-flow/
+-p/
+favicon-gen/
+ftpdeploy/
+INTEL_RMA_EVIDENCIAS.txt
+*.log
+
+# Gerados na placa a partir de media/ por make_media.py
+*.rgb565
+
+# Dados da instalacao real (enderecos, inventario, midia da marca): ficam so nesta maquina
+privado/
+ctrl-00/lcd35/rooms.json
+ctrl-00/lcd35/media/*
+!ctrl-00/lcd35/media/README.md

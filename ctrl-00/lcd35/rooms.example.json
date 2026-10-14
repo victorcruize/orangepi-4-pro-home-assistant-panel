@@ -1,0 +1,9 @@
+[
+  {"name": "Sala 1", "light": "switch.sala_1_luz_1", "light2": "switch.sala_1_luz_2", "climate": "climate.sala_1_ar", "setpoint": "climate.sala_1_ar", "temperature": "sensor.sala_1_ar_temperatura", "humidity": "sensor.sala_1_ar_umidade", "tv": "media_player.sala_1_tv"},
+  {"name": "Sala 2", "light": "input_boolean.luz_ambiente_2", "climate": "climate.sala_2_ar", "setpoint": "climate.sala_2_ar", "temperature": "sensor.sala_2_ar_temperatura", "humidity": "sensor.sala_2_ar_umidade"},
+  {"name": "Ambiente 3", "light": "input_boolean.luz_ambiente_3", "climate": "input_boolean.ar_ambiente_3", "setpoint": "input_number.setpoint_ambiente_3", "temperature": "sensor.temperatura_ambiente_3"},
+  {"name": "Ambiente 4", "light": "input_boolean.luz_ambiente_4", "climate": "input_boolean.ar_ambiente_4", "setpoint": "input_number.setpoint_ambiente_4", "temperature": "sensor.temperatura_ambiente_4"},
+  {"name": "Ambiente 5", "light": "input_boolean.luz_ambiente_5", "climate": "input_boolean.ar_ambiente_5", "setpoint": "input_number.setpoint_ambiente_5", "temperature": "sensor.temperatura_ambiente_5"},
+  {"name": "Ambiente 6", "light": "input_boolean.luz_ambiente_6", "climate": "input_boolean.ar_ambiente_6", "setpoint": "input_number.setpoint_ambiente_6", "temperature": "sensor.temperatura_ambiente_6"},
+  {"name": "Ambiente 7", "light": "input_boolean.luz_ambiente_7", "climate": "input_boolean.ar_ambiente_7", "setpoint": "input_number.setpoint_ambiente_7", "temperature": "sensor.temperatura_ambiente_7"}
+]
