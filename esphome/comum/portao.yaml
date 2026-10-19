@@ -1,0 +1,89 @@
+# Modelo de controlador de UM portao (central PPA Triflex Connect).
+# Placa: ESP32-WROOM-32UE-N16 (antena externa U.FL, 16 MB de flash); serve qualquer ESP32 classico
+# ajustando flash_size. Antena externa porque o portao fica longe do roteador.
+# Usado por portao-1.yaml e portao-2.yaml, que so definem nome e numero.
+#
+# A central aceita comandos por pulso para o GND nos bornes (manual PPA P04722):
+#   borne 1 GND, borne 4 BOT (abre/para/fecha), borne 5 ABR (so abrir), borne 6 FEC (so fechar).
+# O ESP fecha esses contatos por um modulo de 2 reles (contato seco, isolado). A saida de 15 V da
+# central (120 mA, sem protecao) NAO alimenta o ESP: use fonte 5 V propria.
+#
+# Pinagem
+#   GPIO16 -> rele 1 (nivel BAIXO aciona) -> contato entre borne 5 ABR e borne 1 GND
+#   GPIO17 -> rele 2 (nivel BAIXO aciona) -> contato entre borne 6 FEC e borne 1 GND
+#   GPIO25 <- sensor magnetico "aberto"  (entre o pino e o GND do ESP)
+#   GPIO26 <- sensor magnetico "fechado" (entre o pino e o GND do ESP)
+#
+# Seguranca: reles SEMPRE desligados ao ligar o ESP (queda de energia nunca abre o portao); pulso
+# curto e unico; nenhum rele exposto ao Home Assistant; fotocelula e anti-esmagamento ficam na central.
+esphome:
+  name: ${nome}
+  friendly_name: ${nome_amigavel}
+  comment: Controlador de portao (PPA Triflex Connect)
+
+esp32:
+  board: esp32dev
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: ${chave_api}
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${nome}-config
+
+switch:
+  - { platform: gpio, id: rele_abrir,  pin: { number: GPIO16, inverted: true }, restore_mode: ALWAYS_OFF, internal: true }
+  - { platform: gpio, id: rele_fechar, pin: { number: GPIO17, inverted: true }, restore_mode: ALWAYS_OFF, internal: true }
+
+binary_sensor:
+  - platform: gpio
+    id: sensor_aberto
+    name: Sensor aberto
+    pin: { number: GPIO25, mode: INPUT_PULLUP, inverted: true }
+    filters: [delayed_on_off: 200ms]
+  - platform: gpio
+    id: sensor_fechado
+    name: Sensor fechado
+    pin: { number: GPIO26, mode: INPUT_PULLUP, inverted: true }
+    filters: [delayed_on_off: 200ms]
+  - platform: status
+    name: Online
+
+# O portao no Home Assistant: abrir e fechar separados (bornes ABR e FEC) e o estado real pelos sensores
+# (aberto, fechado, ou em movimento quando nenhum dos dois esta acionado).
+cover:
+  - platform: template
+    id: portao
+    name: ${nome_amigavel}
+    device_class: gate
+    lambda: |-
+      if (id(sensor_fechado).state) return COVER_CLOSED;
+      if (id(sensor_aberto).state) return COVER_OPEN;
+      return {};
+    open_action:
+      - switch.turn_on: rele_abrir
+      - delay: 500ms
+      - switch.turn_off: rele_abrir
+    close_action:
+      - switch.turn_on: rele_fechar
+      - delay: 500ms
+      - switch.turn_off: rele_fechar
+
+sensor:
+  - platform: wifi_signal
+    name: Sinal Wi-Fi
+    update_interval: 60s
+  - platform: uptime
+    name: Tempo ligado

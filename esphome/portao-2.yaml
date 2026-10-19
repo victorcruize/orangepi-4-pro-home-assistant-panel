@@ -1,0 +1,8 @@
+# Portao 2. Toda a logica esta em comum/portao.yaml; aqui so o nome e a chave da API.
+substitutions:
+  nome: portao-2
+  nome_amigavel: Portão 2
+  chave_api: !secret portao_2_api_key
+
+packages:
+  portao: !include comum/portao.yaml

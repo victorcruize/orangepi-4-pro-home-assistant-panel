@@ -314,13 +314,15 @@ class SettingsMixin:
             status.CAL.update(cal); self.cfg["cal"] = cal; self._config_save(); self._say(f"Toque calibrado (ajuste de {shift:.0f} px)")
 
     # ---- room mapping (which Home Assistant entity each control of a room drives)
-    OPTIONAL_FIELDS = ("light2", "tv")
+    OPTIONAL_FIELDS = ("light2", "light3", "tv")
     ROOM_FIELDS = (("name", "Nome", ()), ("light", "Luz", ("light.", "switch.", "input_boolean.")),
                    ("light2", "Luz 2", ("light.", "switch.", "input_boolean.")),
+                   ("light3", "Led", ("light.", "switch.", "input_boolean.")),
                    ("climate", "Ar", ("climate.", "input_boolean.")), ("temperature", "Temperatura", ("sensor.",)),
                    ("tv", "TV", ("media_player.",)))
 
     def _ent_label(self, eid):
+        if isinstance(eid, list): return "  +  ".join(self._ent_label(e) for e in eid)
         s = self.ha.states.get(eid)
         return s["attributes"].get("friendly_name", eid) if s else (f"{eid} (não existe)" if eid else "nenhum")
 
@@ -335,18 +337,18 @@ class SettingsMixin:
         self._header(d, "Configurar ambiente", back=True, to=("room", idx))
         y = 46
         for key, label, domains in self.ROOM_FIELDS:
-            box = (8, y, 472, y + 42)
+            box = (8, y, 472, y + 36)
             d.rounded_rectangle(box, 9, fill=TILE)
-            d.text((18, y + 14), label, font=F_PILL, fill=ORANGE)
-            d.text((120, y + 9), self._fit(d, room["name"] if key == "name" else self._ent_label(room.get(key, "")), F_LINE, 320), font=F_LINE, fill=TEXT)
-            d.text((446, y + 3), "›", font=F_BTN, fill=MUTED)
+            d.text((18, y + 11), label, font=F_PILL, fill=ORANGE)
+            d.text((120, y + 6), self._fit(d, room["name"] if key == "name" else self._ent_label(room.get(key, "")), F_LINE, 320), font=F_LINE, fill=TEXT)
+            d.text((446, y), "›", font=F_BTN, fill=MUTED)
             if key == "name":
                 def rename(t, room=room):
                     if t.strip(): room["name"] = t.strip(); self._rooms_save()
                 self.hits.append((box, lambda rename=rename: self._ask_text("Nome do ambiente", rename, ("room_cfg", idx), room["name"])))
             else:
                 self.hits.append((box, lambda key=key: (self.pick.__setitem__("page", 0), self._go(("pick", (idx, key))))))
-            y += 46
+            y += 39
 
     def _pick_items(self, key):
         domains = dict((k, dm) for k, _, dm in self.ROOM_FIELDS)[key]

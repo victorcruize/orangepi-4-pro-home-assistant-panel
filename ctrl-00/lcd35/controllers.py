@@ -1,6 +1,6 @@
 """Controllers (ESP32 boards running ESPHome) on the panel: which room each one serves, the state of its
 terminals, and basic checks. Everything goes through Home Assistant, where the boards already report."""
-import time
+import time, unicodedata
 from lcd import W
 from theme import *
 
@@ -52,7 +52,10 @@ class ControllersMixin:
         up = self._val(f"sensor.{n}_tempo_ligado")
         up = f"{float(up) / 3600:.1f} h" if up and float(up) >= 3600 else f"{float(up) / 60:.0f} min" if up else "--"
         sig = self._val(f"sensor.{n}_sinal_wi_fi")
-        rows = [("Ambiente", room["name"] if room else "não definido"),
+        ac = self._val(f"select.{n}_padrao_do_ar")
+        rows = [("Ambiente", room["name"] if room else "não definido")]
+        if ac: rows.append(("Ar", f"padrão {ac}  ›"))
+        rows += [
                 ("Estado", f"online há {up}" if on else "sem comunicação"),
                 ("Rede", f"{self._val(f'sensor.{n}_ip', '--')}  ·  {float(sig):.0f} dBm" if sig else "--")]
         count = self._val(f"sensor.{n}_ir_sinais_recebidos")
@@ -62,16 +65,21 @@ class ControllersMixin:
         if gas is not None:
             alarm = self._val(f"binary_sensor.{n}_gas_acima_do_limite") == "on"
             rows.append(("Gás", f"{float(gas):.2f} V  ·  {'ACIMA DO LIMITE' if alarm else 'normal'}"))
-        y = 52
-        for k, v in rows[:5]:
+        y = 50
+        for k, v in rows[:6]:
             d.text((14, y), k, font=F_NAME, fill=ORANGE)
-            d.text((130, y - 2), self._fit(d, v, F_SUB, 340), font=F_SUB, fill=TEXT); y += 36
+            d.text((130, y - 2), self._fit(d, v, F_SUB, 340), font=F_SUB, fill=TEXT)
+            if k == "Ar": self.hits.append(((8, y - 8, 472, y + 24), lambda: (self.ctrl_pick.__setitem__("page", 0), self._go(("ctrl_ac", n)))))
+            y += 32
         free = on and not self.busy
-        self._button(d, (8, 250, 158, 310), "Identificar", lambda: self._ctrl_identify(n), f=font(17, True),
+        f = font(16, True)
+        self._button(d, (8, 250, 118, 310), "Identificar", lambda: self._ctrl_identify(n), f=f,
                      enabled=free and f"light.{n}_led_da_placa" in self.ha.states)
-        self._button(d, (165, 250, 315, 310), "Testar IR", lambda: self._ctrl_test_ir(n), f=font(17, True),
+        self._button(d, (126, 250, 236, 310), "Testar IR", lambda: self._ctrl_test_ir(n), f=f,
                      enabled=free and f"button.{n}_testar_emissor_ir" in self.ha.states)
-        self._button(d, (322, 250, 472, 310), "Ambiente", lambda: (self.ctrl_pick.__setitem__("page", 0), self._go(("ctrl_room", n))), f=font(17, True))
+        self._button(d, (244, 250, 354, 310), "Som", lambda: self._go(("ctrl_som", n)), f=f,
+                     enabled=on and f"button.{n}_testar_buzzer" in self.ha.states)
+        self._button(d, (362, 250, 472, 310), "Ambiente", lambda: (self.ctrl_pick.__setitem__("page", 0), self._go(("ctrl_room", n))), f=f)
         self._toast_draw(d)
 
     def _ctrl_identify(self, n):
@@ -98,6 +106,81 @@ class ControllersMixin:
                     self._say("Emissor e receptor funcionando"); return
             self._say("Emitiu; o receptor não captou. Aponte o LED para ele", AMBER, 8)
         self._async(work, "Testando o infravermelho…")
+
+    # Short original riff (RTTTL) for the buzzer test: fast, driving, about 4 s.
+    TEST_TUNE = "hub:d=16,o=6,b=150:8e,g,a,8b,a,g,8e,d,e,8g,4a,p,8e,g,a,8b,d7,b,4a,8g,4e"
+
+    def _ctrl_som(self, d, n):
+        """Buzzer volume (stored on the board) and sound tests."""
+        self._header(d, "Som  ·  " + self._ctrl_label(n), back=True, to=("ctrl", n))
+        eid = f"number.{n}_volume_do_bipe"
+        try: cur = int(float(self.ha.states[eid]["state"]))
+        except (KeyError, ValueError): cur = None
+        drag = getattr(self, "light_drag", None)
+        shown = drag[1] if drag and drag[0] == "vol" else cur
+        x0, y0, x1, y1 = 24, 120, 456, 176
+        d.text((x0, 64), "Volume do bipe", font=F_NAME, fill=MUTED)
+        txt = f"{shown}%" if shown is not None else "--"
+        d.text((x1 - d.textlength(txt, font=F_TEMP), 54), txt, font=F_TEMP, fill=TEXT)
+        d.rounded_rectangle((x0, y0, x1, y1), 28, fill=TILE)
+        if shown is not None:
+            fx = x0 + (x1 - x0) * shown / 100
+            if fx - x0 >= 56: d.rounded_rectangle((x0, y0, fx, y1), 28, fill=AMBER)
+            d.ellipse((fx - 26, y0 + 2, fx + 26, y1 - 2), fill=TEXT)
+        def move(x, y):
+            self.light_drag = ("vol", int(min(100, max(0, round((x - x0) * 20 / (x1 - x0)) * 5))))
+        def done():
+            v = self.light_drag; self.light_drag = None
+            if not v: return
+            s = self.ha.states.get(eid)
+            if s: s["state"] = str(v[1])
+            self.ha.call("number", "set_value", entity_id=eid, value=v[1])     # the board beeps at the new volume
+        if cur is not None: self.drags.append(((x0 - 10, y0 - 16, x1 + 10, y1 + 16), move, done))
+        f = font(18, True)
+        self._button(d, (24, 220, 236, 296), "Bipe", lambda: self.ha.call("button", "press", entity_id=f"button.{n}_bipe"), f=f,
+                     enabled=f"button.{n}_bipe" in self.ha.states)
+        self._button(d, (244, 220, 456, 296), "Música de teste", lambda: self._ctrl_test_sound(n), f=f, enabled=not self.busy)
+        if cur is None: self._center(d, (x0, y0, x1, y1), "volume indisponível (firmware antigo)", F_SUB, MUTED)
+        self._toast_draw(d)
+
+    def _ctrl_test_sound(self, n):
+        """Plays a tune on the controller's buzzer (ESPHome action <name>_buzzer_tocar)."""
+        def work():
+            self.ha._request(f"/api/services/esphome/{n}_buzzer_tocar", {"melodia": self.TEST_TUNE})
+            self._say(f"{self._ctrl_label(n)} tocou o teste de som")
+        self._async(work, "Tocando…")
+
+    # ---- which air conditioner remote standard the controller speaks
+    AC_TESTED = {"Samsung", "Elgin"}      # standards confirmed on a real appliance of this installation
+
+    @staticmethod
+    def _ac_entity(n, option):
+        """Climate entity of a standard: the ESP names each one "Ar <option>"."""
+        slug = "".join(c for c in unicodedata.normalize("NFKD", option.lower()) if c.isalnum() or c == " ").strip().replace(" ", "_")
+        return f"climate.{n}_ar_{slug}"
+
+    def _ctrl_ac_pick(self, d, n):
+        self._header(d, "Padrão do ar  ·  " + self._ctrl_label(n), back=True, to=("ctrl", n))
+        sel = f"select.{n}_padrao_do_ar"
+        s = self.ha.states.get(sel)
+        items = list(s["attributes"].get("options", [])) if s else []
+        def row(box, opt):
+            cur = s and s["state"] == opt
+            d.text((box[0] + 12, box[1] + 6), opt, font=F_LINE, fill=GREEN if cur else TEXT)
+            ok = self._ac_entity(n, opt) in self.ha.states
+            tag = "testado em aparelho" if opt in self.AC_TESTED else "pré-configurado"
+            d.text((box[0] + 12, box[1] + 31), (f"em uso  ·  {tag}" if cur else tag) if ok else "não encontrado no Home Assistant",
+                   font=F_SMALL, fill=GREEN if cur else (MUTED if ok else RED))
+        def choose(opt):
+            if s: s["state"] = opt
+            self.ha.call("select", "select_option", entity_id=sel, option=opt)
+            room = self._ctrl_room(n)
+            if room:      # the room's air control and +/- follow the chosen standard
+                room["climate"] = room["setpoint"] = self._ac_entity(n, opt); self._rooms_save()
+            self._say(f"{self._ctrl_label(n)}: ar no padrão {opt}" + ("" if room else " (defina o ambiente para usar no painel)"))
+            self._go(("ctrl", n))
+        self._list(d, items, self.ctrl_pick, row, choose, None, "este controlador não tem seletor de ar", top=48, rows=5)
+        self._toast_draw(d)
 
     # ---- which room a controller serves
     def _ctrl_room_pick(self, d, n):

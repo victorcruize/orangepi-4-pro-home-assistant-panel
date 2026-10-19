@@ -42,6 +42,18 @@ Os blocos sem dispositivo real usam interruptores provisórios (`input_boolean.l
   aplicativo Smart Life, não pelo Bluetooth do servidor.
 - **Fitas e barras Govee:** a integração local exige ativar o "Controle LAN" no aplicativo Govee Home. Sem isso
   a descoberta (UDP 4001/4002) não encontra nada.
+- **Tuya sem nuvem (Tuya Local):** interruptores e lâmpadas Tuya Wi-Fi (inclusive marcas próprias como Positivo,
+  depois de recadastradas no Smart Life) aceitam controle direto pela rede, protocolo 3.3 a 3.5. A integração
+  Tuya Local busca a chave local de cada aparelho uma vez pela conta Smart Life e depois dispensa a internet.
+  Lições: a chave local muda se o aparelho for recadastrado (sintoma: "erro 914, chave ou versão"); a
+  sugestão automática de tipo pode errar (um interruptor de 2 teclas veio como de 1); e cada aparelho aceita
+  poucas conexões locais simultâneas.
+- **Three-way sem fio entre interruptores inteligentes:** cada lâmpada fica ligada a uma tecla de um
+  interruptor e a tecla livre do outro a espelha, por uma automação no Home Assistant. Nunca interligar
+  eletricamente dois interruptores inteligentes. Sem o servidor, cada tecla ligada à lâmpada continua
+  funcionando; só o espelho para.
+- **Várias luzes num botão:** no `rooms.json`, o campo `light3` aceita uma lista de entidades; o botão LED da
+  sala abre então um menu com um controle por item (por exemplo, uma barra e um grupo de lâmpadas).
 
 ## Controladores ESP32 (ESPHome)
 
@@ -64,6 +76,15 @@ Os blocos sem dispositivo real usam interruptores provisórios (`input_boolean.l
 - **Sessões de log:** `timeout N docker exec esphome esphome logs ...` deixa o processo vivo dentro do contêiner, e
   as sessões acumuladas esgotam as conexões do ESP. Usar `docker exec esphome timeout N esphome logs ...`.
 
+### Biblioteca de padrões de ar
+
+O ESP traz vários padrões de controle de ar ao mesmo tempo, cada um como um "Ar <marca>", e um seletor
+"Padrão do ar" grava na placa qual deles a sala usa. O painel muda o padrão pela tela do controlador e
+aponta a sala para o ar escolhido. Elgin usa o protocolo **TCL112** (cabeçalho `23 CB 26`, 14 bytes, soma
+de verificação), já suportado pelo ESPHome. Para identificar o protocolo de um controle desconhecido: ligar
+os logs do ESP, apertar os botões perto do receptor e procurar quadros decodificados; quando o decodificador
+inverte a ordem dos bits (o AEHA mostrava `C4 D3 64`), inverter cada byte revela o cabeçalho conhecido.
+
 ### Protocolo do ar-condicionado Samsung
 
 Mapeado a partir de capturas do controle original e implementado em
@@ -81,6 +102,15 @@ Mapeado a partir de capturas do controle original e implementado em
 - Código de verificação por seção: soma dos bits em 1 do byte 0, da metade baixa do byte 1, da metade alta do
   byte 2 e dos bytes 3 a 6, invertida. A metade baixa do resultado vai na metade alta do byte 1; a metade alta,
   na metade baixa do byte 2.
+
+## Portões (PPA Triflex Connect)
+
+O módulo PPA Connect Smart ON só fala com o aplicativo e a nuvem da PPA; não há integração com o Home
+Assistant. A central, porém, aceita comandos por pulso para o GND nos bornes (manual PPA P04722): borne 1
+GND, 4 BOT (abre, para e fecha), 5 ABR (só abrir), 6 FEC (só fechar). Um ESP32 por portão
+([`esphome/comum/portao.yaml`](../esphome/comum/portao.yaml)) fecha ABR e FEC por relés isolados e lê dois
+sensores magnéticos (aberto e fechado). A saída de 15 V da central fornece só 120 mA, sem proteção: o ESP
+precisa de fonte própria. Portões longe do roteador pedem ESP com antena externa (WROOM-32UE).
 
 ## Como um dispositivo chega ao painel
 

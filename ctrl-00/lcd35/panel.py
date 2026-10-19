@@ -1,5 +1,6 @@
 """Touch panel for CTRL-00: room tiles and per-room controls backed by Home Assistant."""
-import json, math, os, threading, time, urllib.error, urllib.request
+import colorsys, json, math, os, threading, time, urllib.error, urllib.request
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from lcd import LCD, W, H
 from status import Touch, to_screen, info
@@ -169,6 +170,10 @@ class HomeAssistant:
                 if self._state_on(eid, s["state"]) == value: self.pending.pop((eid, key), None)
                 else: s["state"] = "on" if value else "off"
                 continue
+            if key == "mode":
+                if s["state"] == value: self.pending.pop((eid, key), None)
+                else: s["state"] = value
+                continue
             real = s["state"] if key == "value" else s["attributes"].get(key)
             try: same = abs(float(real) - float(value)) < 0.005
             except (TypeError, ValueError): same = real == value
@@ -201,6 +206,44 @@ class HomeAssistant:
         if s: s["attributes"]["is_volume_muted"] = muted; self._expect(eid, "is_volume_muted", muted)
         self.call("media_player", "volume_mute", entity_id=eid, is_volume_muted=muted)
 
+    def light_caps(self, eid):
+        """(dimmable, has colour, has white temperature) of a light entity."""
+        modes = set((self.states.get(eid) or {}).get("attributes", {}).get("supported_color_modes") or ())
+        color = bool(modes & {"hs", "rgb", "rgbw", "rgbww", "xy"})
+        return bool(modes - {"onoff"}), color, "color_temp" in modes
+
+    def brightness(self, eid):
+        """Brightness in percent, or None while off or unknown."""
+        b = (self.states.get(eid) or {}).get("attributes", {}).get("brightness")
+        return round(b * 100 / 255) if isinstance(b, (int, float)) else None
+
+    def set_brightness(self, eid, pct):
+        pct = int(min(100, max(1, pct)))
+        s = self.states.get(eid)
+        if s:
+            raw = round(pct * 255 / 100)
+            s["state"] = "on"; s["attributes"]["brightness"] = raw
+            self._expect(eid, "brightness", raw); self._expect(eid, "state", True)
+        self.call("light", "turn_on", entity_id=eid, brightness_pct=pct)
+
+    def set_color(self, eid, rgb=None, kelvin=None):
+        s = self.states.get(eid)
+        if s:
+            s["state"] = "on"; self._expect(eid, "state", True)
+            s["attributes"].update({"color_mode": "rgb", "rgb_color": list(rgb)} if rgb else {"color_mode": "color_temp", "color_temp_kelvin": kelvin})
+        if rgb: self.call("light", "turn_on", entity_id=eid, rgb_color=list(rgb))
+        else: self.call("light", "turn_on", entity_id=eid, color_temp_kelvin=kelvin)
+
+    def climate_set(self, eid, field, value):
+        """hvac mode, fan mode or swing mode of a climate entity, shown at once and held until confirmed."""
+        s = self.states.get(eid)
+        if field == "hvac_mode":
+            if s: s["state"] = value; self._expect(eid, "mode", value)
+            self.call("climate", "set_hvac_mode", entity_id=eid, hvac_mode=value)
+        else:
+            if s: s["attributes"][field] = value; self._expect(eid, field, value)
+            self.call("climate", f"set_{field}", entity_id=eid, **{field: value})
+
     def set_number(self, eid, value):
         s = self.states.get(eid)
         if eid.startswith("climate."):
@@ -220,6 +263,7 @@ class Panel(SettingsMixin, ControllersMixin):
         self.ha, self.lcd, self.tp = HomeAssistant(), LCD(hz=32_000_000), Touch()
         self._apply_rotation()
         self.view, self.hits, self.last_touch = "start", [], time.time()
+        self.drags, self.dragging, self.light_drag = [], None, None
 
     # ---- drawing helpers
     def _center(self, d, box, text, f, fill):
@@ -318,7 +362,7 @@ class Panel(SettingsMixin, ControllersMixin):
             self._center(d, (x, y + 28, x + tw, y + 72) if hum is not None else (x, y + 30, x + tw, y + 78),
                          f"{t:.1f}°" if t is not None else "--", F_TEMP, TEXT if t is not None else TILE_HI)
             if hum is not None: self._center(d, (x, y + 72, x + tw, y + 94), f"{hum:.0f}% umid.", F_SUB, CYAN)
-            self._pill(d, x + 8, y + th - 30, "LUZ", self.ha.is_on(room["light"]) or self.ha.is_on(room.get("light2", "")), AMBER)
+            self._pill(d, x + 8, y + th - 30, "LUZ", any(self.ha.is_on(e) for k in ("light", "light2", "light3") for e in self._ents(room.get(k))), AMBER)
             self._pill(d, x + tw - 52, y + th - 30, "AR", self.ha.is_on(room["climate"]), CYAN)
             self.hits.append((box, lambda i=i: self._go(("room", i))))
 
@@ -326,17 +370,23 @@ class Panel(SettingsMixin, ControllersMixin):
         room = self.rooms[idx]
         self._header(d, self._fit(d, room["name"], F_TITLE, 240), back=True)
         self._button(d, (346, 5, 400, 39), "⚙", lambda: self._go(("room_cfg", idx)), f=F_ICON)
-        tv, light2 = room.get("tv"), room.get("light2")
-        tiles = [("LUZ 1" if light2 else "LUZ", room["light"], AMBER, ("LIGADA", "DESLIGADA"), None)]
-        if light2: tiles.append(("LUZ 2", light2, AMBER, ("LIGADA", "DESLIGADA"), None))
-        tiles.append(("AR", room["climate"], CYAN, ("LIGADO", "DESLIGADO"), None))
+        tv = room.get("tv")
+        tiles = [("LUZ 1" if room.get("light2") else "LUZ", room["light"], AMBER, ("LIGADA", "DESLIGADA"), None)]
+        tiles += [(label, room[k], AMBER, ("LIGADA", "DESLIGADA"), None) for k, label in (("light2", "LUZ 2"), ("light3", "LED")) if room.get(k)]
+        for k, (label, eid, color, words, action) in enumerate(tiles):
+            if isinstance(eid, list):          # several lights under one button: it opens a menu with one control each
+                tiles[k] = (label, eid, color, ("LIGADO ›", "DESLIGADO ›"), lambda label=label: self._go(("leds", (idx, label))))
+            elif self.ha.light_caps(eid)[0]:   # dimmable: the tile opens intensity and colour
+                tiles[k] = (label, eid, color, ("LIGADA ›", "DESLIGADA ›"), lambda eid=eid, label=label: self._go(("light", (idx, eid, label))))
+        ar_open = (lambda: self._go(("ar", idx))) if room["climate"].startswith("climate.") else None
+        tiles.append(("AR", room["climate"], CYAN, ("LIGADO ›", "DESLIGADO ›") if ar_open else ("LIGADO", "DESLIGADO"), ar_open))
         if tv: tiles.append(("TV", tv, GREEN, ("LIGADA ›", "DESLIGADA ›"), lambda: self._go(("tv", idx))))
         tw = (W - 8 * (len(tiles) + 1)) / len(tiles)
         cols = [(int(8 + k * (tw + 8)), int(8 + k * (tw + 8) + tw)) for k in range(len(tiles))]
         for (x0, x1), (label, eid, color, words, action) in zip(cols, tiles):
-            box, on = (x0, 50, x1, 166), self.ha.is_on(eid)
+            box, on = (x0, 50, x1, 166), any(self.ha.is_on(e) for e in self._ents(eid))
             d.rounded_rectangle(box, 12, fill=color if on else TILE)
-            self._center(d, (box[0], box[1] + 14, box[2], box[1] + 70), label, F_BTN, BG if on else TEXT)
+            self._center(d, (box[0], box[1] + 14, box[2], box[1] + 70), label, F_BTN if len(tiles) < 5 else F_KEY, BG if on else TEXT)
             self._center(d, (box[0], box[1] + 72, box[2], box[3] - 12), words[0] if on else words[1], F_SUB, BG if on else MUTED)
             self.hits.append((box, action or (lambda eid=eid: self.ha.toggle(eid))))
         sp, eid = self.ha.number(room["setpoint"]), room["setpoint"]
@@ -370,6 +420,183 @@ class Panel(SettingsMixin, ControllersMixin):
             if level is not None: self.hits.append((box, lambda step=step: self.ha.set_volume(eid, level + step)))
         self._center(d, (136, 180, 344, 272), f"{level * 100:.0f}" if level is not None else "--", F_HUGE, TEXT)
         self._center(d, (136, 276, 344, 306), "volume", F_SUB, MUTED)
+
+    WHEEL_C, WHEEL_R = (124, 184), 112          # colour wheel: centre and radius on screen
+    FADER = (256, 152, 472, 200)                 # brightness fader track
+
+    @staticmethod
+    def _wheel_image(r):
+        """Hue around, saturation outwards (white at the centre), as an RGB image with its circular mask."""
+        n = 2 * r + 1
+        y, x = np.mgrid[-r:r + 1, -r:r + 1].astype(np.float32)
+        hue = (np.degrees(np.arctan2(-y, x)) % 360) / 60.0
+        sat = np.clip(np.hypot(x, y) / r, 0, 1)
+        i, f = np.floor(hue).astype(int) % 6, hue - np.floor(hue)
+        p_, q, t = 1 - sat, 1 - sat * f, 1 - sat * (1 - f)
+        one = np.ones_like(sat)
+        rgb = np.select([i[..., None] == k for k in range(6)],
+                        [np.dstack(c) for c in ((one, t, p_), (q, one, p_), (p_, one, t), (p_, q, one), (t, p_, one), (one, p_, q))])
+        img = Image.fromarray((rgb * 255).astype(np.uint8), "RGB")
+        mask = Image.fromarray(((np.hypot(x, y) <= r) * 255).astype(np.uint8), "L")
+        return img, mask
+
+    def _wheel_pick(self, x, y):
+        """Colour under a point of the wheel (clamped to the rim), and the point itself."""
+        (cx, cy), r = self.WHEEL_C, self.WHEEL_R
+        dx, dy = x - cx, y - cy
+        dist = math.hypot(dx, dy)
+        if dist > r: dx, dy, dist = dx * r / dist, dy * r / dist, r
+        h = (math.degrees(math.atan2(-dy, dx)) % 360) / 360
+        rgb = tuple(round(v * 255) for v in colorsys.hsv_to_rgb(h, dist / r, 1))
+        return rgb, (cx + dx, cy + dy)
+
+    def _wheel_point(self, rgb):
+        h, s, _ = colorsys.rgb_to_hsv(*(v / 255 for v in rgb))
+        (cx, cy), r = self.WHEEL_C, self.WHEEL_R
+        a = math.radians(h * 360)
+        return cx + math.cos(a) * s * r, cy - math.sin(a) * s * r
+
+    # Labels for the climate screen; anything not listed is shown as the integration names it.
+    AC_MODES = {"heat_cool": "AUTO", "auto": "AUTO", "cool": "FRIO", "dry": "SECO", "fan_only": "VENTIL.", "heat": "CALOR"}
+    AC_FANS = {"auto": "AUTO", "low": "BAIXA", "medium": "MÉDIA", "middle": "MÉDIA", "high": "ALTA", "quiet": "SILENC.",
+               "focus": "FOCO", "diffuse": "DIFUSO", "turbo": "TURBO", "max": "MÁX"}
+    AC_SWING = {"off": "PARADA", "vertical": "VERTICAL", "horizontal": "HORIZ.", "both": "AMBAS", "on": "MOVENDO"}
+
+    def _ar(self, d, idx):
+        """Full air conditioner control: power, setpoint, mode, fan and louvres."""
+        room = self.rooms[idx]; eid = room["climate"]
+        s = self.ha.states.get(eid); a = s["attributes"] if s else {}
+        self._header(d, self._fit(d, a.get("friendly_name", "Ar"), F_TITLE, 290), back=True, to=("room", idx))
+        state = s["state"] if s else "unavailable"
+        on = state not in ("off", "unavailable", "unknown")
+        modes = [m for m in a.get("hvac_modes", []) if m != "off"] or ["cool"]
+        last = getattr(self, "_ar_last", {}).get(eid)
+        # power
+        box = (8, 48, 128, 118)
+        d.rounded_rectangle(box, 12, fill=CYAN if on else TILE)
+        self._center(d, (box[0], box[1] + 6, box[2], box[1] + 40), "AR", F_BTN, BG if on else TEXT)
+        self._center(d, (box[0], box[1] + 40, box[2], box[3] - 4), "LIGADO" if on else "DESLIGADO", F_SMALL, BG if on else MUTED)
+        def power():
+            if on: self._ar_last = {**getattr(self, "_ar_last", {}), eid: state}; self.ha.climate_set(eid, "hvac_mode", "off")
+            else: self.ha.climate_set(eid, "hvac_mode", last if last in modes else ("cool" if "cool" in modes else modes[0]))
+        self.hits.append((box, power))
+        # setpoint
+        sp = a.get("temperature"); lo, hi = a.get("min_temp", 16), a.get("max_temp", 30)
+        step = a.get("target_temp_step") or 1
+        for box, sign, k in (((136, 48, 216, 118), "−", -1), ((392, 48, 472, 118), "+", 1)):
+            d.rounded_rectangle(box, 12, fill=TILE_HI); self._center(d, box, sign, F_HUGE, TEXT)
+            self.hits.append((box, lambda k=k: sp is not None and self.ha.set_number(eid, min(hi, max(lo, sp + k * step)))))
+        self._center(d, (220, 46, 388, 100), f"{sp:.0f}°" if isinstance(sp, (int, float)) else "--", F_HUGE, TEXT if on else MUTED)
+        cur = a.get("current_temperature")
+        self._center(d, (220, 98, 388, 120), f"ambiente {cur:.1f}°" if isinstance(cur, (int, float)) else "temperatura", F_SMALL, MUTED)
+        # option rows: mode, fan, louvres
+        rows = [("Modo", modes, state if on else None, self.AC_MODES, lambda v: self.ha.climate_set(eid, "hvac_mode", v)),
+                ("Ventil.", a.get("fan_modes") or [], a.get("fan_mode"), self.AC_FANS, lambda v: self.ha.climate_set(eid, "fan_mode", v)),
+                ("Aletas", a.get("swing_modes") or [], a.get("swing_mode"), self.AC_SWING, lambda v: self.ha.climate_set(eid, "swing_mode", v))]
+        y = 128
+        for label, opts, cur_v, names, act in rows:
+            if not opts: continue
+            d.text((10, y + 15), label, font=F_PILL, fill=ORANGE)
+            n = len(opts); x0 = 74; bw = (W - 8 - x0 - 6 * (n - 1)) / n
+            for k, o in enumerate(opts):
+                bx = (int(x0 + k * (bw + 6)), y, int(x0 + k * (bw + 6) + bw), y + 50)
+                sel = o == cur_v
+                d.rounded_rectangle(bx, 10, fill=AMBER if sel else TILE)
+                txt = names.get(o, o.replace("_", " ").upper())
+                fnt = F_PILL if d.textlength(txt, font=F_PILL) <= bw - 8 else F_SMALL
+                self._center(d, bx, self._fit(d, txt, fnt, bw - 6), fnt, BG if sel else (TEXT if on else MUTED))
+                self.hits.append((bx, lambda o=o, act=act: act(o)))
+            y += 62
+
+    @staticmethod
+    def _ents(v):
+        """A room control holds one entity id or, for a menu of several, a list of them."""
+        return [e for e in (v if isinstance(v, list) else [v]) if e]
+
+    def _leds(self, d, arg):
+        """One button, several lights: a tile per light, each opening its own colour and intensity screen."""
+        idx, label = arg
+        room = self.rooms[idx]
+        self._header(d, f"{label}  ·  {room['name']}", back=True, to=("room", idx))
+        ents = self._ents(room.get("light3"))
+        n = max(1, len(ents))
+        cw = (W - 8 * (n + 1)) / n
+        for k, eid in enumerate(ents):
+            x0 = int(8 + k * (cw + 8)); box = (x0, 52, int(x0 + cw), 312)
+            s = self.ha.states.get(eid); a = s["attributes"] if s else {}
+            on, pct = self.ha.is_on(eid), self.ha.brightness(eid)
+            name = a.get("friendly_name", eid)
+            rgb = a.get("rgb_color") if on and a.get("color_mode") not in ("color_temp", None) else None
+            d.rounded_rectangle(box, 14, fill=AMBER if on else TILE)
+            fg, sub = (BG, BG) if on else (TEXT, MUTED)
+            self._center(d, (box[0] + 8, box[1] + 18, box[2] - 8, box[1] + 60), self._fit(d, name, F_BTN if n < 3 else F_KEY, cw - 24), F_BTN if n < 3 else F_KEY, fg)
+            self._center(d, (box[0], box[1] + 64, box[2], box[1] + 96), "LIGADO" if on else "DESLIGADO", F_SUB, sub)
+            self._center(d, (box[0], box[1] + 100, box[2], box[1] + 170), f"{pct}%" if on and pct is not None else "--", F_HUGE, fg)
+            if rgb:      # current colour as a swatch under the tile
+                d.rounded_rectangle((box[0] + 24, box[3] - 54, box[2] - 24, box[3] - 30), 10, fill=tuple(rgb))
+            self._center(d, (box[0], box[3] - 26, box[2], box[3] - 4), "cor e intensidade ›", F_SMALL, sub)
+            self.hits.append((box, lambda eid=eid, name=name: self._go(("light", (idx, eid, name, ("leds", (idx, label)))))))
+
+    def _light(self, d, arg):
+        idx, eid, label = arg[:3]
+        back = arg[3] if len(arg) > 3 else ("room", idx)
+        s = self.ha.states.get(eid)
+        a = s["attributes"] if s else {}
+        self._header(d, self._fit(d, a.get("friendly_name", label), F_TITLE, 290), back=True, to=back)
+        on, pct = self.ha.is_on(eid), self.ha.brightness(eid)
+        _, has_rgb, has_ct = self.ha.light_caps(eid)
+        drag = getattr(self, "light_drag", None)      # value under the finger, shown before it is sent
+        # on / off
+        box = (256, 50, 472, 110)
+        d.rounded_rectangle(box, 12, fill=AMBER if on else TILE)
+        self._center(d, (box[0], box[1] + 4, box[2], box[1] + 36), label, F_KEY, BG if on else TEXT)
+        self._center(d, (box[0], box[1] + 34, box[2], box[3] - 4), "LIGADO" if on else "DESLIGADO", F_SUB, BG if on else MUTED)
+        self.hits.append((box, lambda: self.ha.toggle(eid)))
+        # brightness fader
+        shown = drag[1] if drag and drag[0] == "fader" else (pct if on else None)
+        x0, y0, x1, y1 = self.FADER
+        d.text((x0 + 2, y0 - 26), "Intensidade", font=F_SUB, fill=MUTED)
+        txt = f"{shown}%" if shown is not None else "--"
+        d.text((x1 - d.textlength(txt, font=F_NAME), y0 - 26), txt, font=F_NAME, fill=TEXT)
+        d.rounded_rectangle(self.FADER, 24, fill=TILE)
+        if shown:
+            fx = x0 + (x1 - x0) * shown / 100
+            if fx - x0 >= 40: d.rounded_rectangle((x0, y0, fx, y1), 24, fill=AMBER)
+            d.ellipse((fx - 22, y0 + 2, fx + 22, y1 - 2), fill=TEXT)
+        def fader_move(x, y):
+            self.light_drag = ("fader", int(min(100, max(1, round((x - x0) * 100 / (x1 - x0))))))
+        def fader_done():
+            v = self.light_drag; self.light_drag = None
+            if v: self.ha.set_brightness(eid, v[1])
+        self.drags.append(((x0 - 10, y0 - 14, x1 + 10, y1 + 14), fader_move, fader_done))
+        # white temperatures
+        if has_ct:
+            cur_k = a.get("color_temp_kelvin") if on and a.get("color_mode") == "color_temp" else None
+            for box, k, name, tone in (((256, 232, 360, 300), 2700, "QUENTE", (255, 196, 120)), ((368, 232, 472, 300), 6500, "FRIA", (226, 236, 255))):
+                if cur_k and abs(cur_k - k) < 400: d.rounded_rectangle((box[0] - 3, box[1] - 3, box[2] + 3, box[3] + 3), 14, fill=TEXT)
+                d.rounded_rectangle(box, 12, fill=tone)
+                self._center(d, box, name, F_PILL, BG)
+                self.hits.append((box, lambda k=k: self.ha.set_color(eid, kelvin=k)))
+        # colour wheel
+        (cx, cy), r = self.WHEEL_C, self.WHEEL_R
+        if has_rgb:
+            if not hasattr(self, "_wheel"): self._wheel = self._wheel_image(r)
+            self._canvas.paste(self._wheel[0], (cx - r, cy - r), self._wheel[1])
+            if drag and drag[0] == "wheel": point = drag[2]
+            elif on and a.get("color_mode") != "color_temp" and a.get("rgb_color"): point = self._wheel_point(a["rgb_color"])
+            else: point = None
+            if point:
+                px, py = point
+                d.ellipse((px - 13, py - 13, px + 13, py + 13), fill=BG)
+                d.ellipse((px - 10, py - 10, px + 10, py + 10), fill=TEXT)
+            def wheel_move(x, y):
+                rgb, pt = self._wheel_pick(x, y); self.light_drag = ("wheel", rgb, pt)
+            def wheel_done():
+                v = self.light_drag; self.light_drag = None
+                if v: self.ha.set_color(eid, rgb=v[1])
+            self.drags.append(((cx - r - 8, cy - r - 8, cx + r + 8, cy + r + 8), wheel_move, wheel_done))
+        else:
+            self._center(d, (cx - r, cy - 20, cx + r, cy + 20), "sem cor", F_SUB, MUTED)
 
     def _system(self, d):
         self._header(d, "Sistema", back=True)
@@ -412,13 +639,13 @@ class Panel(SettingsMixin, ControllersMixin):
     def render(self):
         if self.cfg.get("theme", "glass") == "glass": img = glass.canvas(); d = glass.GlassDraw(img)
         else: img = Image.new("RGB", (W, H), BG); d = ImageDraw.Draw(img)
-        self.hits = []
+        self.hits, self.drags, self._canvas = [], [], img
         v = self.view; name = v if isinstance(v, str) else v[0]
         simple = {"start": self._start, "home": self._home, "system": self._system, "wifi": self._wifi, "bt": self._bt,
                   "kbd": self._kbd, "confirm": self._confirm, "display": self._display, "calib": self._calib, "ctrls": self._ctrls}
         if name in simple: simple[name](d)
-        else: {"room": self._room, "wifi_net": self._wifi_net, "bt_dev": self._bt_dev, "room_cfg": self._room_cfg, "pick": self._pick, "tv": self._tv,
-                   "ctrl": self._ctrl, "ctrl_room": self._ctrl_room_pick}[name](d, v[1])
+        else: {"room": self._room, "wifi_net": self._wifi_net, "bt_dev": self._bt_dev, "room_cfg": self._room_cfg, "pick": self._pick, "tv": self._tv, "light": self._light, "leds": self._leds, "ar": self._ar,
+                   "ctrl": self._ctrl, "ctrl_room": self._ctrl_room_pick, "ctrl_ac": self._ctrl_ac_pick, "ctrl_som": self._ctrl_som}[name](d, v[1])
         self.lcd.show(img)
 
     def run(self):
@@ -452,11 +679,18 @@ class Panel(SettingsMixin, ControllersMixin):
                         self._calib_touch(t); dirty = True
                     else:
                         x, y = to_screen(t)
-                        for (l, tp_, r, b), action in self.hits:
-                            if l <= x <= r and tp_ <= y <= b: action(); dirty = True; break
+                        for (l, tp_, r, b), move, done in self.drags:
+                            if l <= x <= r and tp_ <= y <= b: self.dragging = (move, done); move(x, y); dirty = True; break
+                        else:
+                            for (l, tp_, r, b), action in self.hits:
+                                if l <= x <= r and tp_ <= y <= b: action(); dirty = True; break
+                elif self.dragging:          # finger held: follow it, send only on release
+                    self.dragging[0](*to_screen(t)); dirty = True
             else:
                 released += 1
-                if released >= 2: pressed = False
+                if released >= 2:
+                    pressed = False
+                    if self.dragging: self.dragging[1](); self.dragging, dirty = None, True
             idle = now - self.last_touch
             if self.view != "start" and not self.busy and idle > self.cfg["idle_s"]: self.view, dirty = "start", True
             if self.view == "start" and saver and self.cfg["saver_s"] and not pressed and idle > self.cfg["saver_s"]:

@@ -7,6 +7,7 @@
 #   GPIO1  <- AO do sensor MQ, POR DIVISOR 10k/20k (o módulo trabalha em 5 V; o ESP só aceita 3,3 V)
 #   GPIO2  <- DO do sensor MQ, POR DIVISOR 10k/20k
 #   GPIO48 = LED RGB da placa (ja soldado)
+#   GPIO12 -> I/O do buzzer passivo MH-FMD (VCC 3,3 V, GND). O modulo liga com nivel BAIXO: saida invertida.
 #   Reservados: GPIO8/GPIO9 para I2C (sensor de temperatura e umidade), GPIO10/GPIO11 para relés.
 # Placa: ESP32-S3 (QFN56) rev v0.2, 16 MB de flash, 8 MB de PSRAM embutida (modulo N16R8), USB-Serial/JTAG nativa.
 # Com PSRAM octal, os GPIOs 35, 36 e 37 nao podem ser usados; 26 a 32 sao da flash.
@@ -14,6 +15,12 @@ esphome:
   name: esp-01
   friendly_name: ESP-01
   comment: Controlador de ambiente (piloto)
+  # Melodia curta e suave quando a placa termina de iniciar (sons: ver o bloco rtttl no fim do arquivo).
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'id(buzzer).set_gain(id(volume_bipe).state / 100.0f);'
+      - rtttl.play: "inicio:d=8,o=6,b=110:c,e,g,4c7"
 
 # Componente proprio para o ar-condicionado Samsung (pasta components/samsung_ac_ir).
 external_components:
@@ -44,6 +51,14 @@ api:
         - remote_transmitter.transmit_raw:
             carrier_frequency: 38kHz
             code: !lambda 'return code;'
+        - rtttl.play: "ir:d=32,o=7,b=200:c"
+    # Toca uma melodia RTTTL no buzzer. No Home Assistant: esphome.esp_01_buzzer_tocar
+    - action: buzzer_tocar
+      variables:
+        melodia: string
+      then:
+        - rtttl.play:
+            rtttl: !lambda 'return melodia;'
 
 globals:
   - id: ir_count
@@ -117,11 +132,64 @@ remote_receiver:
 # Ar-condicionado Samsung por infravermelho. Monta o comando completo (modo, temperatura, ventilacao,
 # aletas) e acompanha o controle original pelo receptor. Funciona sem internet.
 climate:
+  # Biblioteca de padroes de controle de ar. Cada padrao e um "Ar <marca>" proprio; o seletor
+  # "Padrao do ar" (abaixo) diz qual deles a sala usa, e o painel 3,5" aponta a sala para ele.
+  # Todos acompanham o controle original pelo receptor. Testados em aparelho: Samsung (recepcao) e Elgin.
+  # Para acrescentar uma marca: um bloco aqui + a opcao no seletor (o nome da opcao = "Ar <opcao>").
+
+  # Samsung split: protocolo proprio, sem suporte no ESPHome (componente samsung_ac_ir deste projeto).
   - platform: samsung_ac_ir
-    name: Ar
+    name: Ar Samsung
     receiver_id: ir_rx
     sensor: temp_ambiente
     humidity_sensor: umid_ambiente
+    on_control: &bipe_ok
+      - rtttl.play: "ok:d=32,o=6,b=200:e,g"
+
+  # Elgin: protocolo TCL112 (cabecalho 23 CB 26, 14 bytes, soma de verificacao). Capturado e confirmado.
+  - platform: tcl112
+    name: Ar Elgin
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+
+  # Pre-configurados pelo suporte do ESPHome, ainda nao testados em aparelho real.
+  - platform: midea_ir          # Midea, Springer Midea, Carrier e outras do grupo
+    name: Ar Midea
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: gree
+    name: Ar Gree
+    model: yan
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: climate_ir_lg
+    name: Ar LG
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: daikin
+    name: Ar Daikin
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: fujitsu_general
+    name: Ar Fujitsu
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: whirlpool         # Consul e Brastemp
+    name: Ar Consul
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
+  - platform: coolix            # protocolo comum em marcas genericas (Komeco, Philco e outras)
+    name: Ar Coolix
+    receiver_id: ir_rx
+    sensor: temp_ambiente
+    on_control: *bipe_ok
 
 switch:
   # Ligado, o proximo comando recebido e enviado ao servidor para ser salvo. Desliga sozinho em 60 s.
@@ -132,8 +200,11 @@ switch:
     optimistic: true
     restore_mode: ALWAYS_OFF
     on_turn_on:
+      - rtttl.play: "aprender:d=16,o=6,b=180:c,e,g"
       - delay: 60s
       - switch.turn_off: ir_learn
+    on_turn_off:
+      - rtttl.play: "fim:d=16,o=5,b=180:g"
 
 # O ESP32-S3 tem 192 símbolos de memória RMT para transmissão, divididos entre o emissor IR e o LED da placa.
 remote_transmitter:
@@ -225,6 +296,14 @@ light:
 button:
   - platform: restart
     name: Reiniciar
+  - platform: template
+    name: Bipe
+    on_press:
+      - rtttl.play: "bipe:d=16,o=6,b=200:c"
+  - platform: template
+    name: Testar buzzer
+    on_press:
+      - rtttl.play: "teste:d=8,o=6,b=180:c,e,g,c7"
   # Dispara um código NEC qualquer, só para conferir o LED emissor (ele pisca visível na câmera do celular).
   - platform: template
     name: Testar emissor IR
@@ -235,3 +314,48 @@ button:
           repeat:
             times: 5
             wait_time: 100ms
+
+# Buzzer passivo (MH-FMD, transistor PNP: liga com nivel baixo). PWM pelo LEDC para tocar tons.
+output:
+  - platform: ledc
+    id: buzzer_saida
+    pin:
+      number: GPIO12
+      inverted: true
+
+rtttl:
+  id: buzzer
+  output: buzzer_saida
+  gain: 30%
+
+# Volume de todos os sons da placa. Fica gravado nela; o painel 3,5" ajusta pelo botao Som do controlador.
+number:
+  - platform: template
+    id: volume_bipe
+    name: Volume do bipe
+    icon: mdi:volume-high
+    entity_category: config
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 5
+    optimistic: true
+    restore_value: true
+    initial_value: 30
+    on_value:
+      - lambda: 'id(buzzer).set_gain(x / 100.0f);'
+      - rtttl.play: "vol:d=16,o=6,b=200:c"
+
+# Qual padrao de controle de ar esta sala usa. Fica gravado na placa; o painel 3,5" le e grava aqui.
+select:
+  - platform: template
+    name: Padrao do ar
+    icon: mdi:air-conditioner
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options: [Samsung, Elgin, Midea, Gree, LG, Daikin, Fujitsu, Consul, Coolix]
+    initial_option: Samsung
+    on_value:
+      - rtttl.play: "ok:d=32,o=6,b=200:e,g"
+

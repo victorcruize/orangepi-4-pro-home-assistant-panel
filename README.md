@@ -132,6 +132,17 @@ with its own theme and a kiosk mode for dedicated monitors.
 | `glass.py` | frosted-glass visual theme, applied to every control |
 | `make_media.py` | builds the intro and the screensaver from a logo and a video |
 
+What each room offers on the panel:
+
+- **lights** as on/off buttons; a dimmable or colour light opens its own screen with a colour wheel and a
+  drag fader for intensity, and one button can hold several lights, opening a menu with one control each;
+- **air conditioning** with a full screen: power, setpoint, mode, fan speed and louvres, built from the
+  options the appliance itself reports, so it adapts to any integration;
+- **TV** with power, volume and mute.
+
+The controllers screen shows each ESP32 board, the room it serves, its terminals, an infrared self-test,
+the air conditioner remote standard it speaks and its buzzer volume.
+
 One interface detail that applies to any panel on top of cloud integrations: a tapped value stays "pending"
 until the appliance confirms it. Without that, the screen shows the new value, goes back to the old one and then
 changes again.
@@ -160,7 +171,16 @@ ESPHome integration and provides:
   air conditioner of any brand;
 - a **learning mode**, which hands the next received command to the server;
 - a **Bluetooth proxy**, which extends Home Assistant's reach to that room;
-- sensors and diagnostics (Wi-Fi signal, internal temperature, gas).
+- sensors and diagnostics (Wi-Fi signal, internal temperature, gas);
+- a **buzzer** for audible confirmations (start-up tune, commands received), with a stored volume;
+- a **library of air conditioner remote standards** (Samsung, Elgin/TCL112, Midea, Gree, LG, Daikin,
+  Fujitsu, Consul/Whirlpool, Coolix): a selector on the board, also reachable from the panel, says which
+  one the room uses.
+
+[`esphome/comum/portao.yaml`](esphome/comum/portao.yaml) is a gate controller for PPA Triflex Connect
+centrals (common in Brazil): one ESP32 per gate pulses the central's own "open only" and "close only"
+inputs through isolated relays, and two magnetic sensors report open, closed or moving. Relays always start
+off, so a power cut never opens a gate.
 
 For air conditioners, ESPHome already ships support for several brands, such as Midea, Gree, LG, Daikin,
 Fujitsu, Mitsubishi and those using the Coolix protocol. In those cases one line of configuration is enough.
